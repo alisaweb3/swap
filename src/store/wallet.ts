@@ -3,10 +3,10 @@ import type { StateCreator } from 'zustand';
 import { create } from 'zustand';
 import type { PersistOptions } from 'zustand/middleware';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import toast from 'react-hot-toast';
 
 import type { BriefChainInfo } from '@/shared/types/chain';
 import { getSideChainInfo } from '@/shared/types/chain';
-//import { SideSigningStargateClient } from '@/utils/side_stargateclient';
 import { defaultRegistryTypes, AminoTypes } from '@cosmjs/stargate';
 import SigningKeplerEthermintClient from '@/utils/SigningKeplrEthermintClient';
 
@@ -20,8 +20,6 @@ import {
 import { ibcProtoRegistry, ibcAminoConverters } from '@/codegen/ibc/client';
 
 import chargeCoins from '@/http/requests/post/chargeCoins';
-import { OfflineDirectSigner } from '@keplr-wallet/types';
-import fetchAccount from '@/http/requests/get/fetchAccount';
 import fetchBalances from '@/http/requests/get/fetchBalance';
 
 export const getSigningClientOptions = () => {
@@ -44,74 +42,142 @@ export interface Wallet {
   address: string;
   chainInfo: BriefChainInfo;
 }
+export interface Balance {
+  id: string;
+  balances: Coin[];
+}
 interface WalletState {
   loading: boolean;
   isConnected: boolean;
   wallets: Wallet[];
+  selectedWallet: Wallet;
+  balanceList: Balance[];
   selectedChain: BriefChainInfo;
   setLoading: (isLoad: boolean) => void;
+  connectSelectedWallet: () => Promise<void>;
   connectWallet: () => Promise<void>;
+  setChain: (chain: BriefChainInfo) => Promise<void>;
   suggestChain: (chain: BriefChainInfo) => Promise<void>;
   getClient: (
     chain: BriefChainInfo
   ) => Promise<SigningKeplerEthermintClient | undefined>;
   disconnect: () => void;
   charge: () => Promise<void>;
-  getBalance: () => Promise<
+  getBalance: (isAll?: boolean) => Promise<
     {
       id: string;
       balances: Coin[];
     }[]
   >;
+  setBalance: (balance: Balance[]) => void;
 }
 
 type WalletPersist = (
   config: StateCreator<WalletState>,
   options: PersistOptions<WalletState>
 ) => StateCreator<WalletState>;
-console.log(AppConfig.chains, 'AppConfig.chains');
+
 const useWalletStore = create<WalletState>(
   (persist as WalletPersist)(
     (set, get) => ({
       loading: false,
       isConnected: false,
       wallets: [],
-      selectedChain: {},
+      selectedWallet: {
+        address: '',
+        chainInfo: {},
+      },
+      selectedChain: AppConfig.chains[0],
+      balanceList: [],
       setLoading: (isLoad: boolean) => {
         set((state) => ({
           ...state,
           loading: isLoad,
         }));
       },
-      suggestChain: async (chain: BriefChainInfo) => {
+      setChain: async (chain: BriefChainInfo) => {
         const { keplr } = window;
         if (!keplr) {
-          alert('You need to install Keplr');
-          throw new Error('You need to install Keplr');
+          toast.error('You need to install Keplr');
+          return;
         }
         const chainInfo = getSideChainInfo(chain);
         await keplr.experimentalSuggestChain(chainInfo);
+
         set((state) => ({
           ...state,
           selectedChain: chain,
         }));
-        
       },
-      connectWallet: async () => {
-        const { setLoading, suggestChain } = get();
+      suggestChain: async (chain: BriefChainInfo) => {
+        const { keplr } = window;
+        if (!keplr) {
+          toast.error('You need to install Keplr');
+          return;
+        }
+        const chainInfo = getSideChainInfo(chain);
+        await keplr.experimentalSuggestChain(chainInfo);
+
+        set((state) => ({
+          ...state,
+          selectedChain: chain,
+        }));
+      },
+      connectSelectedWallet: async () => {
+        const { setLoading, suggestChain, selectedChain } = get();
         setLoading(true);
 
         const { keplr } = window;
         if (!keplr) {
-          alert('You need to install Keplr');
-          throw new Error('You need to install Keplr');
+          toast.error('You need to install Keplr');
+          return;
+        }
+
+        let newWallet: Wallet = { address: '', chainInfo: {} };
+        try {
+          const chainInfo = getSideChainInfo(selectedChain);
+          await keplr.experimentalSuggestChain(chainInfo);
+          // Poll until the chain is approved and the signer is available
+          const offlineSigner = await keplr.getOfflineSigner(
+            selectedChain.chainID
+          );
+          const newCreator = (await offlineSigner.getAccounts())[0].address;
+          newWallet = {
+            address: newCreator,
+            chainInfo: selectedChain,
+          };
+        } catch (error) {
+          console.log('Connection Error', error);
+        }
+
+        if (newWallet.address !== '') {
+          set((state) => ({
+            ...state,
+            isConnected: true,
+            selectedWallet: newWallet,
+          }));
+        } else {
+          console.log('Not all chains could be registered.');
+        }
+        setLoading(false);
+      },
+      connectWallet: async () => {
+        const { setLoading, suggestChain, selectedChain } = get();
+        setLoading(true);
+
+        const { keplr } = window;
+        if (!keplr) {
+          toast.error('You need to install Keplr');
+          return;
         }
 
         const newWallets: Wallet[] = [];
-
+        // const chain = selectedChain;
         for (const chain of AppConfig.chains) {
           try {
-            await suggestChain(chain);
+            // await suggestChain(chain);
+            const chainInfo = getSideChainInfo(chain);
+            await keplr.experimentalSuggestChain(chainInfo);
             // Poll until the chain is approved and the signer is available
             const offlineSigner = await keplr.getOfflineSigner(chain.chainID);
             //console.log("OfflineSigner", offlineSigner)
@@ -141,6 +207,11 @@ const useWalletStore = create<WalletState>(
             ...state,
             isConnected: true,
             wallets: newWallets,
+            selectedWallet: newWallets.find((item) => {
+              if (item.chainInfo.chainID === selectedChain.chainID) {
+                return item;
+              }
+            }),
           }));
         } else {
           console.log('Not all chains could be registered.');
@@ -156,8 +227,8 @@ const useWalletStore = create<WalletState>(
           setLoading(true);
           const { keplr } = window;
           if (!keplr) {
-            alert('You need to install Keplr');
-            throw new Error('You need to install Keplr');
+            toast.error('You need to install Keplr');
+            return;
           }
           const chainInfo = getSideChainInfo(chain);
           await keplr.experimentalSuggestChain(chainInfo);
@@ -186,15 +257,24 @@ const useWalletStore = create<WalletState>(
         }
       },
       disconnect: () => {
-        set((state) => ({ ...state, isConnected: false, wallets: [] }));
+        set((state) => ({
+          ...state,
+          isConnected: false,
+          wallets: [],
+          selectedWallet: { address: '', chainInfo: {} },
+        }));
       },
 
       charge: async () => {
-        const { wallets, setLoading, connectWallet } = get();
+        const { wallets, setLoading, connectWallet, selectedChain } = get();
         await connectWallet();
         setLoading(true);
+        const currentWallets = wallets.filter((item) => {
+          return item.chainInfo?.chainID === selectedChain?.chainID;
+        });
+        const toastItem = toast.loading('Charging');
         const res = await PromisePool.withConcurrency(2)
-          .for(wallets)
+          .for(currentWallets)
           .process(async (chain) => {
             const url = new URL(chain.chainInfo.rpcUrl);
             await chargeCoins(
@@ -202,16 +282,26 @@ const useWalletStore = create<WalletState>(
               chain.chainInfo.denom,
               chain.address
             );
+            toast.success('Charge Success', {
+              id: toastItem,
+            });
           });
         setLoading(false);
-        console.log(res.errors);
+        if (res?.errors?.[0]?.message) {
+          toast.error(res?.errors?.[0]?.message, {
+            id: toastItem,
+          });
+        }
       },
-      getBalance: async () => {
-        const { wallets, setLoading, connectWallet } = get();
+      getBalance: async (isAll?: boolean) => {
+        const { wallets, setLoading, connectWallet, selectedChain } = get();
         await connectWallet();
         setLoading(true);
+        const currentWalletItem = wallets.filter((item) => {
+          return item.chainInfo?.chainID === selectedChain?.chainID;
+        });
         const res = await PromisePool.withConcurrency(2)
-          .for(wallets)
+          .for(isAll ? wallets : currentWalletItem)
           .process(async (chain) => {
             const balances = await fetchBalances(
               chain.chainInfo.restUrl,
@@ -220,8 +310,21 @@ const useWalletStore = create<WalletState>(
             return { id: chain.chainInfo.chainID, balances: balances };
           });
         setLoading(false);
-
+        console.log(res.results.flat());
         return res.results.flat();
+      },
+      setBalance: (balances: Balance[]) => {
+        const { selectedChain } = get();
+
+        const balance = balances?.filter((item) => {
+          if (item.id === selectedChain.chainID) {
+            return item;
+          }
+        });
+        set((state) => ({
+          ...state,
+          balanceList: balance,
+        }));
       },
     }),
     { name: 'wallet-store', storage: createJSONStorage(() => sessionStorage) }

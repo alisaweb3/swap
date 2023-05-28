@@ -1,3 +1,4 @@
+import React from 'react';
 import { Coin } from '@cosmjs/stargate';
 
 export type CoinInputProps = {
@@ -13,6 +14,7 @@ export function CoinInput({ placeholder, coin, onChange }: CoinInputProps) {
       placeholder={placeholder}
       onChange={(event) => onChange(event.target.value)}
       value={coin.amount}
+      min="0"
     />
   );
 }
