@@ -22,7 +22,7 @@ import {} from '@/codegen/ibc/applications/interchain_swap/v1/tx';
 import { encoder } from 'protobufjs';
 import { base64StringToUnit8Array } from '@/utils/utils';
 import { swapStore } from '@/store/swap';
-
+import type { IAsset } from '@/shared/types/asset';
 export type CounterPartyType = {
   chainID: string;
   name: string;
@@ -36,7 +36,7 @@ type Store = {
   poolItem: ILiquidityPool;
   poolForm: {
     action: 'add' | 'redeem';
-    single: ILiquidityPool;
+    single: IAsset;
     signleAmount: string;
     remoteAmount: string;
     nativeAmount: string;
@@ -63,7 +63,7 @@ type Store = {
   poolPagination: {
     total: string;
   };
-  poolLoading: boolean
+  poolLoading: boolean;
 };
 
 export const poolStore = proxy<Store>({
@@ -170,14 +170,14 @@ export const usePoolRemoteListByNative = () => {
 };
 
 export const getPoolList = async (restUrl: string) => {
-  poolStore.poolLoading = true
+  poolStore.poolLoading = true;
   poolStore.poolList = [];
   poolStore.poolPagination = { total: '0' };
   const res = await fetchLiquidityPools(restUrl);
   const { interchainLiquidityPool = [], pagination = { total: '0' } } = res;
   poolStore.poolList = interchainLiquidityPool || [];
   poolStore.poolPagination = pagination || { total: '0' };
-  poolStore.poolLoading = false
+  poolStore.poolLoading = false;
 };
 
 // all assets add
@@ -349,10 +349,6 @@ export const addPoolItemSingle = async (
     (wallet) => wallet.chainInfo.chainID === selectedChain.chainID
   );
   console.log(wallet, 'wallet', selectedChain);
-  if (wallet.chainInfo.denom !== selectedCoin?.balance.denom) {
-    console.log('no wallet');
-    return;
-  }
 
   const deposit = {
     denom,
@@ -546,11 +542,6 @@ export const redeemPoolItemSingle = async (
     return;
   }
   console.log(wallet, 'wallet', selectedChain);
-  if (wallet.chainInfo.denom !== poolStore.poolForm?.single?.balance.denom) {
-    console.log('no wallet');
-    return;
-  }
-
   const deposit = {
     denom: poolStore.poolItem.supply?.denom,
     amount: poolStore.poolForm.signleAmount,
@@ -575,9 +566,9 @@ export const redeemPoolItemSingle = async (
         revisionNumber: Long.fromInt(10000000000),
       },
       timeoutTimeStamp: timeoutTimeStamp,
-      denomOut: poolStore.poolItem.poolId,
-      // denomOut: 'aside'
+      denomOut: poolStore.poolForm.single?.balance?.denom,
     };
+    console.log(singleWithdrawMsg, 'poolStore.poolItem.supply?.denom');
 
     const msg = {
       typeUrl:
